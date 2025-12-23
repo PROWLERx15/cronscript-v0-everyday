@@ -1,0 +1,47 @@
+{
+  "name": "pool-processor",
+  "version": "1.0.0",
+  "description": "Production-ready TypeScript backend for processing reward pools (alarms & focus locks) with merkle root calculation, SNIP-12 signatures, and blockchain finalization",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "alarm:process": "tsx src/index.ts alarm process",
+    "alarm:process-all": "tsx src/index.ts alarm process-all",
+    "alarm:find-latest": "tsx src/index.ts alarm find-latest",
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": [
+    "starknet",
+    "merkle-tree",
+    "snip-12",
+    "rewards",
+    "blockchain",
+    "alarm",
+    "focus-lock"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@scure/starknet": "^1.0.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "commander": "^11.1.0",
+    "dotenv": "^16.3.1",
+    "pino": "^8.17.2",
+    "starknet": "^9.2.1",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "pino-pretty": "^10.3.1",
+    "tsup": "^8.0.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}
