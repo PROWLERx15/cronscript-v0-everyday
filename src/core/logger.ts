@@ -8,16 +8,26 @@
  * - 5x faster than Winston
  */
 
-import pino from 'pino';
+import { pino as createPino, type Logger } from 'pino';
 
 // Configure base logger based on environment
 const isDevelopment = process.env.NODE_ENV === 'development';
 const logLevel = process.env.LOG_LEVEL || 'info';
 
-export const logger = pino({
+const baseOptions = {
   level: logLevel,
-  transport: isDevelopment
-    ? {
+  formatters: {
+    level: (label: string) => {
+      return { level: label };
+    },
+  },
+  timestamp: createPino.stdTimeFunctions.isoTime,
+};
+
+export const logger: Logger = isDevelopment
+  ? createPino({
+      ...baseOptions,
+      transport: {
         target: 'pino-pretty',
         options: {
           colorize: true,
@@ -25,15 +35,9 @@ export const logger = pino({
           ignore: 'pid,hostname',
           singleLine: false,
         },
-      }
-    : undefined, // JSON logs in production
-  formatters: {
-    level: (label) => {
-      return { level: label };
-    },
-  },
-  timestamp: pino.stdTimeFunctions.isoTime,
-});
+      },
+    })
+  : createPino(baseOptions);
 
 /**
  * Create a child logger with module context

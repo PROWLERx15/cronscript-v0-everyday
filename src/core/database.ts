@@ -225,7 +225,7 @@ export async function findLatestAlarmPool(): Promise<PoolInfo | null> {
   log.info('Finding latest alarm pool');
 
   // Try with profiles join first
-  let { data: alarms, error } = await supabase
+  const { data: alarms, error } = await supabase
     .from('alarms')
     .select(
       `
@@ -245,12 +245,30 @@ export async function findLatestAlarmPool(): Promise<PoolInfo | null> {
       .select('wakeup_time')
       .order('wakeup_time', { ascending: false })
       .limit(1);
-
-    alarms = fallback.data;
     if (fallback.error) {
       log.error({ error: fallback.error }, 'Failed to find latest pool');
       throw new Error(`Database query failed: ${fallback.error.message}`);
     }
+    
+    if (!fallback.data || fallback.data.length === 0) {
+      log.warn('No alarms found in database (fallback)');
+      return null;
+    }
+    
+    const latestWakeupTime = fallback.data[0]!.wakeup_time;
+    const poolInfo = calculatePoolInfo(latestWakeupTime);
+
+    log.info(
+      {
+        day: poolInfo.day,
+        period: poolInfo.period,
+        latestWakeupTime,
+        date: new Date(latestWakeupTime * 1000).toISOString(),
+      },
+      'Found latest alarm pool (fallback)'
+    );
+
+    return poolInfo;
   }
 
   if (!alarms || alarms.length === 0) {

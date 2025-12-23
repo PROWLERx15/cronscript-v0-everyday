@@ -45,12 +45,12 @@ export class BlockchainService {
 
     log.info({ rpcUrl: config.starknetRpcUrl }, 'Starknet provider initialized');
 
-    // Initialize account (v9 uses options object)
-    this.account = new Account({
-      nodeUrl: config.starknetRpcUrl,
-      address: config.deployerAddress,
-      signer: config.deployerPrivateKey, // v9 accepts privateKey directly
-    });
+    // Initialize account (pass provider, address, privateKey)
+    this.account = new Account(
+      this.provider,
+      config.deployerAddress,
+      config.deployerPrivateKey
+    );
 
     log.info(
       { address: config.deployerAddress },
@@ -135,7 +135,6 @@ export class BlockchainService {
       log.debug({ nonce }, 'Got account nonce');
 
       // Execute transaction with V3 resource bounds
-      // Second param must be 'undefined' for auto ABI, third param is options
       const result = await this.account!.execute([call], undefined, {
         resourceBounds: {
           l1_gas: { max_amount: '0x186a0', max_price_per_unit: '0x5f5e100' }, // ~100k gas, 100 gwei
@@ -155,7 +154,7 @@ export class BlockchainService {
       
       const receipt = await this.provider!.waitForTransaction(txHash);
 
-      if (receipt.execution_status !== 'SUCCEEDED') {
+      if ('execution_status' in receipt && receipt.execution_status !== 'SUCCEEDED') {
         throw new Error(
           `Transaction failed with status: ${receipt.execution_status}`
         );
@@ -213,7 +212,7 @@ export class BlockchainService {
       });
 
       // Response format: (merkle_root, is_finalized, pool_reward, user_count, total_staked)
-      const resultArray = poolInfo.result ?? poolInfo;
+      const resultArray = Array.isArray(poolInfo) ? poolInfo : (poolInfo as any).result ?? poolInfo;
       const onChainMerkleRoot = this.normalizeHex(resultArray[0]);
       const expectedNormalized = this.normalizeHex(expectedMerkleRoot);
 

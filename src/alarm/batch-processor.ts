@@ -85,7 +85,7 @@ export async function processAllAlarmPools(
           day: pool.day,
           period: pool.period,
           success: true,
-          txHash: result.transaction_hash,
+          ...(result.transaction_hash && { txHash: result.transaction_hash }),
         });
         log.info(
           { poolNumber, day: pool.day, period: pool.period },
@@ -97,7 +97,7 @@ export async function processAllAlarmPools(
           day: pool.day,
           period: pool.period,
           success: false,
-          message: result.message,
+          ...(result.message && { message: result.message }),
         });
         log.warn(
           {

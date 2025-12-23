@@ -227,7 +227,7 @@ export function buildMerkleTree(
         ...left.addresses,
         ...(left !== right ? right.addresses : []),
       ];
-      nextLevel.push({ addresses: parentAddresses, hashBig: parentHashBig });
+      nextLevel.push({ addresses: parentAddresses, hashBig: BigInt(parentHashBig.toString()) });
     }
 
     currentLevel = nextLevel;

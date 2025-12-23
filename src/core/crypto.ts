@@ -5,7 +5,7 @@
  * for alarm and focus lock claim verification
  */
 
-import { hash, ec, encode, shortString } from 'starknet';
+import { hash, ec, shortString } from 'starknet';
 import { AlarmSignature } from '../types/alarm.js';
 import { createModuleLogger } from './logger.js';
 import { toHexString } from './calculator.js';
@@ -51,8 +51,8 @@ export function createAlarmOutcomeSignature(
   wakeupTime: bigint,
   snoozeCount: number,
   expiry: bigint,
-  contractAddress: string,
-  chainId: string,
+  _contractAddress: string,
+  _chainId: string,
   privateKey: string
 ): AlarmSignature {
   // Normalize private key
@@ -134,7 +134,7 @@ export function createAlarmOutcomeSignature(
  */
 export function createFocusOutcomeSignature(
   // Parameters TBD based on focus lock contract
-  ...args: unknown[]
+  ..._args: unknown[]
 ): unknown {
   throw new Error('Focus lock signatures not yet implemented');
 }
