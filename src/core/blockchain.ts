@@ -40,17 +40,17 @@ export class BlockchainService {
     this.provider = new RpcProvider({
       nodeUrl: config.starknetRpcUrl,
       // chainId will be auto-detected
-      blockIdentifier: 'latest' // Alchemy doesn't support 'pending' well
     });
 
     log.info({ rpcUrl: config.starknetRpcUrl }, 'Starknet provider initialized');
 
-    // Initialize account (pass provider, address, privateKey)
-    this.account = new Account(
-      this.provider,
-      config.deployerAddress,
-      config.deployerPrivateKey
-    );
+    // Initialize account for starknet.js v9
+    // The Account class takes an options object
+    this.account = new Account({
+      provider: this.provider,
+      address: config.deployerAddress,
+      signer: config.deployerPrivateKey,
+    });
 
     log.info(
       { address: config.deployerAddress },
@@ -126,20 +126,14 @@ export class BlockchainService {
     log.debug({ call }, 'Prepared contract call');
 
     try {
-      // Get nonce explicitly with 'latest' block (Alchemy compatible)
-      const nonce = await this.provider!.getNonceForAddress(
-        this.account!.address,
-        'latest'
-      );
+      // Get nonce explicitly (starknet.js v9 API)
+      const nonce = await this.account!.getNonce();
       
       log.debug({ nonce }, 'Got account nonce');
 
-      // Execute transaction with V3 resource bounds
-      const result = await this.account!.execute([call], undefined, {
-        resourceBounds: {
-          l1_gas: { max_amount: '0x186a0', max_price_per_unit: '0x5f5e100' }, // ~100k gas, 100 gwei
-          l2_gas: { max_amount: '0x0', max_price_per_unit: '0x0' }
-        },
+      // Execute transaction with starknet.js v9 API
+      // execute(calls, details?) - details include nonce and fee settings
+      const result = await this.account!.execute([call], {
         nonce,
       });
 
