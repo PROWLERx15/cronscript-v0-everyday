@@ -1,0 +1,60 @@
+name: Pool Processor Cron
+
+on:
+  schedule:
+    # Run at 0:30 UTC - Process previous day's Period 1 (PM)
+    - cron: '30 0 * * *'
+    # Run at 12:30 UTC - Process current day's Period 0 (AM)
+    - cron: '30 12 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Skip time buffer check'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  process-pools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 8
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run cron processor
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
+          STARKNET_CHAIN_ID: ${{ secrets.STARKNET_CHAIN_ID }}
+          DEPLOYER_ADDRESS: ${{ secrets.DEPLOYER_ADDRESS }}
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          ALARM_CONTRACT_ADDRESS: ${{ secrets.ALARM_CONTRACT_ADDRESS }}
+          ALARM_VERIFIER_PRIVATE_KEY: ${{ secrets.ALARM_VERIFIER_PRIVATE_KEY }}
+          FOCUS_CONTRACT_ADDRESS: ${{ secrets.FOCUS_CONTRACT_ADDRESS }}
+          FOCUS_VERIFIER_PRIVATE_KEY: ${{ secrets.FOCUS_VERIFIER_PRIVATE_KEY }}
+        run: |
+          echo "=== Cron Status ==="
+          pnpm cron:status
+          echo ""
+          echo "=== Processing Pools ==="
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            pnpm cron:process --force
+          else
+            pnpm cron:process
+          fi

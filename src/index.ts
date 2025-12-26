@@ -21,6 +21,11 @@ import {
   getCurrentPoolInfo as getFocusCurrentPoolInfo,
   displayPoolInfo as displayFocusPoolInfo,
 } from './focus/finder.js';
+import {
+  processCronPools,
+  processAllCronPools,
+  calculatePoolToProcess,
+} from './cron/processor.js';
 import { loadConfig } from './core/config.js';
 import { logger } from './core/logger.js';
 
@@ -252,6 +257,123 @@ focusCommand
       logger.error({ error }, 'Failed to find latest focus lock pool');
       process.exit(1);
     }
+  });
+
+// Cron commands (combined alarm + focus processing)
+const cronCommand = program
+  .command('cron')
+  .description('Combined cron processing for both alarm and focus lock pools');
+
+// Process current cron pool (both alarm and focus)
+cronCommand
+  .command('process')
+  .description('Process current scheduled pool (both alarm and focus lock)')
+  .option('-f, --force', 'Skip time buffer check')
+  .action(async (options) => {
+    try {
+      loadConfig();
+
+      const pool = calculatePoolToProcess();
+      logger.info(
+        {
+          day: pool.day,
+          period: pool.period,
+          force: options.force,
+        },
+        'Processing cron pool (alarm + focus)'
+      );
+
+      const result = await processCronPools(options.force);
+
+      console.log('\n=== Cron Processing Results ===');
+      console.log(`Pool: Day ${result.pool.day}, Period ${result.pool.period}`);
+      console.log(`Processed at: ${result.processed_at}`);
+      console.log('');
+      console.log('Alarm Pool:');
+      console.log(`  Success: ${result.alarm.success}`);
+      if (result.alarm.message) {
+        console.log(`  Message: ${result.alarm.message}`);
+      }
+      if (result.alarm.transaction_hash) {
+        console.log(`  TX Hash: ${result.alarm.transaction_hash}`);
+      }
+      console.log('');
+      console.log('Focus Lock Pool:');
+      console.log(`  Success: ${result.focus.success}`);
+      if (result.focus.message) {
+        console.log(`  Message: ${result.focus.message}`);
+      }
+      if (result.focus.transaction_hash) {
+        console.log(`  TX Hash: ${result.focus.transaction_hash}`);
+      }
+      console.log('');
+      console.log(`Overall Success: ${result.success}`);
+
+      process.exit(result.success ? 0 : 1);
+    } catch (error) {
+      logger.error({ error }, 'Cron processing failed');
+      process.exit(1);
+    }
+  });
+
+// Process all unprocessed pools (both alarm and focus)
+cronCommand
+  .command('process-all')
+  .description('Process all unprocessed pools (both alarm and focus lock)')
+  .option('-f, --force', 'Skip time buffer check for all pools')
+  .action(async (options) => {
+    try {
+      loadConfig();
+
+      logger.info({ force: options.force }, 'Processing all unprocessed pools (alarm + focus)');
+
+      const result = await processAllCronPools(options.force);
+
+      console.log('\n=== Batch Cron Processing Results ===');
+      console.log(`Processed at: ${result.processed_at}`);
+      console.log('');
+      console.log('Alarm Pools:');
+      console.log(`  Total: ${result.alarm.total}`);
+      console.log(`  Success: ${result.alarm.success}`);
+      console.log(`  Failed: ${result.alarm.failed}`);
+      console.log('');
+      console.log('Focus Lock Pools:');
+      console.log(`  Total: ${result.focus.total}`);
+      console.log(`  Success: ${result.focus.success}`);
+      console.log(`  Failed: ${result.focus.failed}`);
+      console.log(`  Skipped: ${result.focus.skipped}`);
+      console.log('');
+      console.log(`Overall Success: ${result.success}`);
+
+      process.exit(result.success ? 0 : 1);
+    } catch (error) {
+      logger.error({ error }, 'Batch cron processing failed');
+      process.exit(1);
+    }
+  });
+
+// Show which pool would be processed
+cronCommand
+  .command('status')
+  .description('Show which pool would be processed by cron')
+  .action(() => {
+    const pool = calculatePoolToProcess();
+    const now = new Date();
+    const currentHour = now.getUTCHours();
+
+    console.log('\n=== Cron Status ===');
+    console.log(`Current UTC time: ${now.toISOString()}`);
+    console.log(`Current UTC hour: ${currentHour}`);
+    console.log('');
+    console.log('Pool to process:');
+    console.log(`  Day: ${pool.day}`);
+    console.log(`  Period: ${pool.period} (${pool.period === 0 ? 'AM 00:00-11:59' : 'PM 12:00-23:59'})`);
+    console.log('');
+    console.log('Cron schedule:');
+    console.log('  0:30 UTC  → Process previous day Period 1 (PM)');
+    console.log('  12:30 UTC → Process current day Period 0 (AM)');
+
+    process.exit(0);
   });
 
 program.parse();
