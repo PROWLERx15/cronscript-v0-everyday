@@ -10,6 +10,7 @@
 
 import { hash } from 'starknet';
 import { RewardData, MerkleTree, U256Parts, BasePoolUser } from '../types/common.js';
+import { FocusLockUser, FocusLockReward } from '../types/focus.js';
 import { createModuleLogger } from './logger.js';
 
 const log = createModuleLogger('calculator');
@@ -321,5 +322,245 @@ export function toBigInt(val: string | number | bigint): bigint {
     return val;
   }
   return BigInt(val);
+}
+
+// ========================================
+// Focus Lock Specific Functions
+// ========================================
+
+/**
+ * Calculate user weight for focus locks (stake × duration)
+ * Higher stake and longer duration result in higher weight
+ */
+export function calculateFocusUserWeight(
+  stakeAmount: bigint,
+  duration: bigint
+): bigint {
+  return stakeAmount * duration;
+}
+
+/**
+ * Calculate total slashed amount from all focus locks
+ */
+export function calculateFocusTotalSlashed(
+  users: FocusLockUser[]
+): bigint {
+  let totalSlashed = 0n;
+
+  for (const user of users) {
+    const stakeAmount = BigInt(user.stake_amount);
+    if (!user.completion_status) {
+      // Failed/exited early - 100% slashed
+      totalSlashed += stakeAmount;
+    }
+    // Successful locks contribute 0 to slashed amount
+  }
+
+  log.debug({ totalSlashed: totalSlashed.toString() }, 'Calculated focus total slashed');
+  return totalSlashed;
+}
+
+/**
+ * Calculate rewards for focus locks with weighted distribution
+ * Rewards are distributed proportionally based on stake × duration per lock
+ * Each lock gets its own reward based on its individual weight
+ */
+export function calculateFocusRewards(
+  users: FocusLockUser[],
+  totalPoolReward: bigint
+): FocusLockReward[] {
+  // Filter winners (completed successfully)
+  const winners = users.filter((u) => u.completion_status === true);
+
+  if (winners.length === 0 || totalPoolReward === 0n) {
+    log.info('No focus lock winners or empty reward pool');
+    return [];
+  }
+
+  // Calculate weighted scores for all winning locks
+  const winnersWithWeights = winners.map((winner) => {
+    const stakeAmount = BigInt(winner.stake_amount);
+    const duration = BigInt(winner.duration);
+    const weight = calculateFocusUserWeight(stakeAmount, duration);
+
+    return {
+      ...winner,
+      weight,
+    };
+  });
+
+  const totalWinnerWeight = winnersWithWeights.reduce(
+    (sum, w) => sum + w.weight,
+    0n
+  );
+
+  if (totalWinnerWeight === 0n) {
+    log.warn('Total winner weight is zero');
+    return [];
+  }
+
+  // Deduct protocol fee (10%)
+  const protocolFee = (totalPoolReward * PROTOCOL_FEE_PERCENT) / PERCENT_BASE;
+  const rewardsForWinners = totalPoolReward - protocolFee;
+
+  log.info(
+    {
+      winners: winners.length,
+      totalPoolReward: totalPoolReward.toString(),
+      protocolFee: protocolFee.toString(),
+      rewardsForWinners: rewardsForWinners.toString(),
+      totalWinnerWeight: totalWinnerWeight.toString(),
+    },
+    'Calculating focus lock rewards (weighted by stake × duration)'
+  );
+
+  // Each lock gets its own reward based on individual weight
+  const rewards: FocusLockReward[] = winnersWithWeights.map((winner) => {
+    const proportionalReward = (rewardsForWinners * winner.weight) / totalWinnerWeight;
+
+    return {
+      address: winner.address,
+      session_id: winner.session_id,
+      reward_amount: proportionalReward.toString(),
+      weight: winner.weight.toString(),
+      stake_amount: winner.stake_amount,
+      duration: winner.duration.toString(),
+    };
+  });
+
+  return rewards;
+}
+
+/**
+ * Create a merkle leaf hash for a focus lock with session_id
+ *
+ * Leaf structure: poseidon([address, session_id, reward.low, reward.high])
+ */
+export function createFocusMerkleLeaf(
+  userAddress: string,
+  sessionId: bigint,
+  rewardAmount: bigint
+): string {
+  const addressFelt = BigInt(userAddress);
+  const sessionIdFelt = BigInt(sessionId);
+
+  // Split u256 into low and high
+  const mask128 = (1n << 128n) - 1n;
+  const rewardLow = rewardAmount & mask128;
+  const rewardHigh = rewardAmount >> 128n;
+
+  const leafHash = hash.computePoseidonHashOnElements([
+    addressFelt,
+    sessionIdFelt,
+    rewardLow,
+    rewardHigh,
+  ]);
+
+  return toHexString(leafHash);
+}
+
+/**
+ * Build focus lock merkle tree with proofs for all locks
+ * Uses Poseidon hashing and sorted pairs (OpenZeppelin standard)
+ *
+ * Each leaf is keyed by "address_sessionid" for unique identification
+ *
+ * @param leaves Array of {address, session_id, hash} objects
+ * @returns Merkle tree with root and proofs keyed by "address_sessionid"
+ */
+export function buildFocusMerkleTree(
+  leaves: Array<{ address: string; session_id: bigint; hash: string }>
+): MerkleTree {
+  if (leaves.length === 0) {
+    const noRewardsHash = hash.computePoseidonHashOnElements([
+      BigInt('0x6e6f5f726577617264734040'), // "no_rewards@@"
+    ]);
+    log.info('Built empty focus merkle tree');
+    return { root: toHexString(noRewardsHash), proofs: {} };
+  }
+
+  if (leaves.length === 1) {
+    const key = `${leaves[0]!.address}_${leaves[0]!.session_id}`;
+    log.info('Built single-leaf focus merkle tree');
+    return { root: leaves[0]!.hash, proofs: { [key]: [] } };
+  }
+
+  const proofs: Record<string, string[]> = {};
+  leaves.forEach((leaf) => {
+    const key = `${leaf.address}_${leaf.session_id}`;
+    proofs[key] = [];
+  });
+
+  // Track all descendant leaf keys for each node
+  let currentLevel = leaves.map((l) => {
+    const key = `${l.address}_${l.session_id}`;
+    return {
+      hashBig: BigInt(l.hash),
+      leafKeys: [key], // Track which leaves are descendants
+    };
+  });
+
+  while (currentLevel.length > 1) {
+    const nextLevel = [];
+
+    for (let i = 0; i < currentLevel.length; i += 2) {
+      const left = currentLevel[i]!;
+      const right = i + 1 < currentLevel.length ? currentLevel[i + 1]! : left;
+
+      // For all leaves in left's subtree, add right's hash to proof
+      for (const leafKey of left.leafKeys) {
+        proofs[leafKey]!.push(toHexString(right.hashBig));
+      }
+
+      // For all leaves in right's subtree, add left's hash to proof
+      if (left !== right) {
+        for (const leafKey of right.leafKeys) {
+          if (!left.leafKeys.includes(leafKey)) {
+            proofs[leafKey]!.push(toHexString(left.hashBig));
+          }
+        }
+      }
+
+      // Compute parent hash using sorted pairs (OpenZeppelin standard)
+      const [sortedA, sortedB] =
+        left.hashBig < right.hashBig
+          ? [left.hashBig, right.hashBig]
+          : [right.hashBig, left.hashBig];
+
+      const parentHashBig = hash.computePoseidonHashOnElements([
+        sortedA,
+        sortedB,
+      ]);
+
+      // Combine leaf keys from both children
+      const combinedLeafKeys = [...left.leafKeys];
+      if (left !== right) {
+        for (const key of right.leafKeys) {
+          if (!combinedLeafKeys.includes(key)) {
+            combinedLeafKeys.push(key);
+          }
+        }
+      }
+
+      nextLevel.push({
+        hashBig: BigInt(parentHashBig.toString()),
+        leafKeys: combinedLeafKeys,
+      });
+    }
+
+    currentLevel = nextLevel;
+  }
+
+  const root = toHexString(currentLevel[0]!.hashBig);
+  log.info(
+    {
+      root,
+      leafCount: leaves.length,
+      proofCount: Object.keys(proofs).length,
+    },
+    'Built focus lock merkle tree'
+  );
+
+  return { root, proofs };
 }
 

@@ -10,6 +10,7 @@
 
 import { hash, ec, shortString } from 'starknet';
 import { AlarmSignature } from '../types/alarm.js';
+import { FocusLockSignature } from '../types/focus.js';
 import { createModuleLogger } from './logger.js';
 import { toHexString } from './calculator.js';
 
@@ -29,6 +30,12 @@ const STARKNET_DOMAIN_TYPE_HASH = BigInt(
 // ClaimRequest Type Hash (from alarm.cairo)
 const CLAIM_REQUEST_TYPE_HASH = BigInt(
   '0x18e6ece967e47a0a2514d06bc44dc82365b0c4dc7b7b3cdf90dc12aca6f139f'
+);
+
+// ClaimRequest Type Hash for Focus Mode (from focus_mode.cairo)
+// Selector: "ClaimRequest(user:ContractAddress,session_id:u64,start_time:u64,duration:u64,completion_status:bool,expiry:u64)"
+const FOCUS_CLAIM_REQUEST_TYPE_HASH = BigInt(
+  '0x2b7465f4af56dace498255033b032e8eae517b65da213072ce297608d8b219d'
 );
 
 /**
@@ -163,16 +170,141 @@ export function createAlarmOutcomeSignature(
 }
 
 /**
- * Placeholder for focus lock SNIP-12 signature
- * 
- * TODO: Implement when focus lock processing is added
- * Will have similar structure but different type hash and struct fields
+ * Create SNIP-12 signature for focus lock claim outcome
+ *
+ * VERIFIED: This implementation is copied WORD-FOR-WORD from the reference
+ * focus_lock_backend.js to ensure exact signature matching.
+ *
+ * Signature structure matches contract's ClaimRequest:
+ * struct ClaimRequest {
+ *   user: ContractAddress,
+ *   session_id: u64,
+ *   start_time: u64,
+ *   duration: u64,
+ *   completion_status: bool,
+ *   expiry: u64
+ * }
+ *
+ * Hash computation (Manual Poseidon - SNIP-12 compliant):
+ * 1. domain_hash = poseidon([STARKNET_DOMAIN_TYPE_HASH, name, version, chainId, revision])
+ * 2. struct_hash = poseidon([FOCUS_CLAIM_REQUEST_TYPE_HASH, user, session_id, start_time, duration, completion_status, expiry])
+ * 3. message_hash = poseidon(['StarkNet Message', domain_hash, user, struct_hash])
+ * 4. Sign with STARK curve using raw hex (no 0x prefix)
+ *
+ * @returns Signature components (r, s, message_hash, public_key)
  */
 export function createFocusOutcomeSignature(
-  // Parameters TBD based on focus lock contract
-  ..._args: unknown[]
-): unknown {
-  throw new Error('Focus lock signatures not yet implemented');
+  userAddress: string,
+  sessionId: bigint,
+  startTime: bigint,
+  duration: bigint,
+  completionStatus: boolean,
+  expiry: bigint,
+  _contractAddress: string,
+  chainId: string,
+  privateKey: string
+): FocusLockSignature {
+  // Log all signature inputs for debugging
+  log.info(
+    {
+      user: userAddress,
+      sessionId: sessionId.toString(),
+      startTime: startTime.toString(),
+      startTimeDate: new Date(Number(startTime) * 1000).toISOString(),
+      duration: duration.toString(),
+      durationHours: (Number(duration) / 3600).toFixed(2),
+      completionStatus,
+      expiry: expiry.toString(),
+      expiryDate: new Date(Number(expiry) * 1000).toISOString(),
+      chainId,
+    },
+    '🔐 Creating SNIP-12 focus lock signature - INPUTS'
+  );
+
+  // Step 1: Compute domain hash (matching SNIP-12 with chainId and revision)
+  // poseidon([STARKNET_DOMAIN_TYPE_HASH, name, version, chainId, revision])
+  const domainHash = hash.computePoseidonHashOnElements([
+    STARKNET_DOMAIN_TYPE_HASH,
+    BigInt(shortString.encodeShortString('EverydayApp')),
+    BigInt(shortString.encodeShortString('1')),
+    BigInt(chainId), // Chain ID (e.g., SN_SEPOLIA hex)
+    BigInt(1), // revision
+  ]);
+
+  // Step 2: Compute struct hash
+  // poseidon([FOCUS_CLAIM_REQUEST_TYPE_HASH, user, session_id, start_time, duration, completion_status, expiry])
+  const structHash = hash.computePoseidonHashOnElements([
+    FOCUS_CLAIM_REQUEST_TYPE_HASH,
+    BigInt(userAddress),
+    sessionId,
+    startTime,
+    duration,
+    BigInt(completionStatus ? 1 : 0), // bool to felt252
+    expiry,
+  ]);
+
+  // Step 3: Compute final message hash (SNIP-12)
+  // poseidon(['StarkNet Message', domain_hash, user, struct_hash])
+  const messageHash = hash.computePoseidonHashOnElements([
+    BigInt(shortString.encodeShortString('StarkNet Message')),
+    BigInt(domainHash),
+    BigInt(userAddress),
+    BigInt(structHash),
+  ]);
+
+  // Step 4: Prepare message hash for signing
+  // CRITICAL: Pad to 64 chars (32 bytes) and ensure no 0x prefix for signing
+  let msgHex = BigInt(messageHash).toString(16);
+  msgHex = msgHex.padStart(64, '0');
+
+  // Clean private key - remove 0x prefix for signing
+  let privKeyClean = privateKey;
+  if (privKeyClean.startsWith('0x')) {
+    privKeyClean = privKeyClean.slice(2);
+  }
+
+  log.debug(
+    {
+      domainHash: toHexString(domainHash),
+      structHash: toHexString(structHash),
+      messageHash: `0x${msgHex}`,
+    },
+    'SNIP-12 hash components computed'
+  );
+
+  // Step 5: Sign with STARK curve using raw hex
+  const signature = ec.starkCurve.sign(msgHex, privKeyClean);
+
+  // Get public key (needs 0x prefix for this call)
+  const normalizedPrivateKey = privateKey.startsWith('0x') ? privateKey : '0x' + privateKey;
+  const publicKey = ec.starkCurve.getStarkKey(normalizedPrivateKey);
+
+  const result = {
+    message_hash: `0x${msgHex}`,
+    signature_r: toHexString(signature.r),
+    signature_s: toHexString(signature.s),
+    public_key: toHexString(publicKey),
+  };
+
+  // Log the complete signature output
+  log.info(
+    {
+      user: userAddress,
+      sessionId: sessionId.toString(),
+      startTime: startTime.toString(),
+      duration: duration.toString(),
+      completionStatus,
+      expiry: expiry.toString(),
+      chainId,
+      messageHash: result.message_hash,
+      signatureR: result.signature_r,
+      signatureS: result.signature_s,
+      publicKey: result.public_key,
+    },
+    '✅ SNIP-12 focus lock signature created - FULL OUTPUT'
+  );
+
+  return result;
 }
 
 /**

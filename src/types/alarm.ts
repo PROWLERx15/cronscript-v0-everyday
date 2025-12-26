@@ -59,9 +59,6 @@ export interface DatabaseAlarmRecord {
   deleted: boolean;
   claim_ready: boolean;
   has_claimed: boolean;
-  profiles?: {
-    wallet_address: string;
-  };
 }
 
 /**
